@@ -1,0 +1,134 @@
+name: Build C6 GSI
+
+# 为什么默认是 self-hosted：
+#   本地实测 out/ = 111GB，源码树 = 95GB，合计 206GB。
+#   GitHub 托管 runner（ubuntu-latest）只有 14GB SSD + 84GB 临时盘 ≈ 98GB，
+#   内存 16GB，完整 AOSP 构建会先磁盘耗尽、再 OOM。
+#   想用托管 runner 只能上 larger runner（16C/64GB/1TB，约 $0.032/min），
+#   一次完整构建 3 小时 ≈ $6，按需手动触发前请先算清成本。
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '构建目标'
+        required: true
+        default: systemimage
+        type: choice
+        options:
+          - systemimage          # 完整 GSI（2-4 小时）
+          - libbluetooth_jni     # 只重编蓝牙库（2-5 分钟，验证 LDAC 改动）
+      clean_out:
+        description: '删除 out/ 后全量重建（慢，但能排掉增量构建的脏状态）'
+        type: boolean
+        default: false
+      upload_release:
+        description: '把 system.img 传到 Release（2.7GB，会占用仓库空间）'
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-c6-gsi
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # 改成 [self-hosted, linux, x64] 或 larger runner 的 label
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 360
+
+    steps:
+      - name: 前置检查
+        run: |
+          set -e
+          SRC="${{ vars.AOSP_SRC_DIR }}"
+          if [ -z "$SRC" ]; then SRC="$HOME/derpfest13"; fi
+          echo "源码目录: $SRC"
+          echo "--- 磁盘 ---"; df -h "$(dirname "$SRC")" 2>/dev/null || df -h .
+          echo "--- 内存 ---"; free -g || true
+          echo "--- CPU ---"; nproc
+          echo "--- 工具 ---"
+          for t in repo git java ccache unzip python3; do
+            printf '%-8s ' "$t"; command -v "$t" >/dev/null && "$t" --version 2>&1 | head -1 || echo "缺失"
+          done
+
+      - name: 同步源码
+        run: |
+          set -e
+          SRC="${{ vars.AOSP_SRC_DIR }}"
+          if [ -z "$SRC" ]; then SRC="$HOME/derpfest13"; fi
+          mkdir -p "$SRC"
+          cd "$SRC"
+          if [ ! -d .repo ]; then
+            echo "首次同步，init manifest"
+            repo init -u https://github.com/Black-emmmm/derpfest13-c6-manifest -b main --depth=1
+          fi
+          # -c 只取当前分支，--no-tags 省流量；不用 --no-clone-bundle，清华镜像的 bundle 更快
+          repo sync -c -j"$(nproc)" --force-sync --no-tags
+
+      - name: 应用设备树补丁
+        run: |
+          set -e
+          SRC="${{ vars.AOSP_SRC_DIR }}"
+          if [ -z "$SRC" ]; then SRC="$HOME/derpfest13"; fi
+          cd "$SRC/device/phh/treble"
+          bash c6-patches/apply.sh ../.. --check
+          bash c6-patches/apply.sh ../..
+
+      - name: 清理 out（可选）
+        if: ${{ inputs.clean_out }}
+        run: |
+          SRC="${{ vars.AOSP_SRC_DIR }}"
+          if [ -z "$SRC" ]; then SRC="$HOME/derpfest13"; fi
+          rm -rf "$SRC/out"
+          echo "out/ 已清空"
+
+      - name: 构建
+        run: |
+          set -e
+          SRC="${{ vars.AOSP_SRC_DIR }}"
+          if [ -z "$SRC" ]; then SRC="$HOME/derpfest13"; fi
+          cd "$SRC"
+          export LC_ALL=C
+          export ALLOW_MISSING_DEPENDENCIES=true   # 树里缺 cts_defaults 之类，必须放开
+          rm -f out/.lock
+          source build/envsetup.sh
+          lunch aosp_arm64_avS-userdebug
+
+          if [ "${{ inputs.target }}" = "libbluetooth_jni" ]; then
+            m libbluetooth_jni -j2
+          else
+            # build_systemimage.sh 内部串行，并行会 OOM
+            bash build_systemimage.sh
+          fi
+
+      - name: 校验产物
+        run: |
+          set -e
+          SRC="${{ vars.AOSP_SRC_DIR }}"
+          if [ -z "$SRC" ]; then SRC="$HOME/derpfest13"; fi
+          cd "$SRC/out/target/product/arm64_avS"
+          ls -lh system.img 2>/dev/null || echo "system.img 不存在（target=libbluetooth_jni 时正常）"
+          if [ -f system.img ]; then
+            # 脚本无 set -e，失败也会打印「完成」，必须靠 mtime + md5 双重确认
+            echo "mtime: $(stat -c %y system.img)"
+            md5sum system.img | tee system.img.md5
+          fi
+          if [ "${{ inputs.target }}" = "libbluetooth_jni" ]; then
+            md5sum "$SRC/out/target/product/arm64_avS/apex/com.android.btservices/lib64/libbluetooth_jni.so"
+          fi
+
+      - name: 上传产物到 Release
+        if: ${{ inputs.upload_release && inputs.target == 'systemimage' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          SRC="${{ vars.AOSP_SRC_DIR }}"
+          if [ -z "$SRC" ]; then SRC="$HOME/derpfest13"; fi
+          cd "$SRC/out/target/product/arm64_avS"
+          TAG="build-$(date +%Y%m%d-%H%M)"
+          gh release create "$TAG" system.img system.img.md5 \
+            --repo "${{ github.repository }}" \
+            --title "C6 GSI $TAG" \
+            --notes "自动构建产物，commit ${{ github.sha }}"

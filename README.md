@@ -82,6 +82,55 @@ soong bootstrap 直接失败。
 - **`com.sprd.logmanager`**：展锐自带的老应用会在 fork 时 SELinux 上下文设置
   失败，导致 **zygote abort**（全部 App 重启）。建议 `pm disable-user` 掉。
 
+## 云构建
+
+仓库里有 `.github/workflows/build.yml`，手动触发（`workflow_dispatch`），可选
+`systemimage` / `libbluetooth_jni` 两个目标。
+
+**先说资源账**，这决定了能不能用托管 runner：
+
+| 项 | 实测/需求 |
+|---|---|
+| `out/` 目录 | **111 GB** |
+| 源码树 | **95 GB** |
+| 合计 | **206 GB** |
+| `system.img` | 2.7 GB |
+| 完整构建耗时 | 2–4 小时（串行，并行会 OOM） |
+
+对照 GitHub 托管 runner：`ubuntu-latest` 是 4 vCPU / 16GB RAM / 14GB SSD + 84GB 临时盘
+≈ **98GB**，连源码都放不下，更别说 `out/`。所以 workflow 默认 `runs-on: [self-hosted, linux]`。
+
+### 方案一：自托管 runner（推荐）
+
+在已经能正常构建的机器上跑，源码常驻、增量构建只需几分钟：
+
+```bash
+# 在 GitHub 仓库 Settings → Actions → Runners → New self-hosted runner
+mkdir -p ~/actions-runner && cd ~/actions-runner
+# 按页面给出的命令下载并注册，然后：
+./run.sh          # 前台；或 sudo ./svc.sh install && sudo ./svc.sh start 常驻
+```
+
+然后在仓库 **Settings → Variables** 里加一个 `AOSP_SRC_DIR`，指向源码根目录
+（例如 `/home/black/WorkBuddy/Work/derpfest-build/derpfest13/aosp`）。不配则默认 `$HOME/derpfest13`。
+
+runner 机器需要具备：`repo`、`git`、`openjdk-11`、`ccache`、`python3`、`unzip`，
+以及 **至少 250GB 可用磁盘**。workflow 第一步会把磁盘/内存/工具全打印出来，跑挂了先看那段。
+
+### 方案二：larger runner（付费）
+
+想完全交给云端，需要 larger runner（16C / 64GB / 1TB），按公开价约 **$0.032/min**，
+一次 3 小时构建 ≈ **$6**。把 `runs-on` 改成对应 label 即可。**手动触发前先算成本**，
+别绑在 push 上。
+
+### 两个不能省的前置
+
+1. **`ALLOW_MISSING_DEPENDENCIES=true`**：这棵树的 `cts_defaults` 等模块缺失，
+   soong bootstrap 会直接失败，workflow 里已经导出。
+2. **构建成功判据不能只看日志**：`build_systemimage.sh` 没有 `set -e`，
+   失败了一样打印「完成」。必须同时满足日志出现 `#### build completed successfully`
+   **且** `system.img` 的 mtime 是本次，workflow 的「校验产物」步骤会打 mtime + md5。
+
 ## 配套 Magisk 模块
 
 见 [c6-gsi-modules](https://github.com/Black-emmmm/c6-gsi-modules)。
