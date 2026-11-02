@@ -3,16 +3,18 @@
 给 CB-C6-STU（`ud710_2h10` / UD710 / 1200×1920 竖屏）编译 DerpFest 13 GSI 的 repo manifest。
 
 不需要 fork 整棵 AOSP 树。本仓库只做一件事：在官方 manifest 之后追加
-`snippets/c6.xml`，用 `remove-project` 把两个改动过的上游项目替换成本人分支。
+`snippets/c6.xml`，用 `remove-project` 把三个上游项目替换成本人分支。
 
 ## 覆盖的项目
 
-| 项目 | 改了什么 |
-|---|---|
-| `packages/modules/Bluetooth` | LDAC 默认 96000Hz / **24bit** / 660kbps；Gd stack 启动超时 3s → 15s |
-| `vendor/derp` | 启动动画、`build/soong/Android.bp`、`config/common.mk`、`config/telephony.mk` |
+| 项目 | 分支 | 改了什么 |
+|---|---|---|
+| `device/phh/treble` | `13.0` | **设备树**：`aosp_arm64_avS.mk` 产品配置、`c6-patches/`（SystemUI 三处补丁 + 完整文件覆盖脚本）、`sepolicy`、`overlay`、`lightsfix` |
+| `packages/modules/Bluetooth` | `main` | LDAC 默认 96000Hz / **24bit** / 660kbps；Gd stack 启动超时 3s → 15s |
+| `vendor/derp` | `main` | `build/soong/Android.bp`、`config/common.mk`、`config/telephony.mk` |
 
 其余 1154 个项目仍是 AOSP（清华镜像 `android-13.0.0_r75`）与 DerpFest 官方。
+设备树这一条替换掉了 `default.xml` 里原本指向 `sounddrill31/device_phh_treble_aosp` 的通用 phh treble。
 
 ## 同步
 
@@ -23,6 +25,17 @@ repo sync -c -j8 --force-sync --no-clone-bundle --no-tags
 ```
 
 首次同步约 60–80 GB，建议预留 150 GB 磁盘。
+
+同步完成后**必须**再跑一次设备树自带的系统层补丁，否则编出来的东西和
+`system_avS_v22_gms.img` 不一致：
+
+```bash
+cd device/phh/treble
+bash c6-patches/apply.sh ../..        # 完整文件覆盖，最稳
+bash c6-patches/apply.sh ../.. --check # 只看差异，不改动
+```
+
+覆盖前原文件会备份到 `c6-patches/backup-<时间戳>/`。改完必须重编。
 
 ## 构建
 
