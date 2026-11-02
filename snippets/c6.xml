@@ -1,40 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest>
   <!--
-    C6 (Unisoc UD710 / CB-C6-STU) 的 DerpFest 13 定制补丁。
+    C6 (Unisoc UD710 / CB-C6-STU) 的 DerpFest 13 定制覆盖。
 
-    只覆盖两个上游项目，其余 1154 个项目仍走 AOSP 清华镜像和 DerpFest 官方，
+    只覆盖三个上游项目，其余 1154 个项目仍走 AOSP 清华镜像和 DerpFest 官方，
     不需要 fork 整棵树。必须在本文件之前先 include 完上游 snippets，
     否则 remove-project 找不到要移除的项目。
   -->
   <remote name="c6" fetch="https://github.com/Black-emmmm" />
 
   <!--
-    AOSP Bluetooth，三处改动：
-      1) system/stack/a2dp/a2dp_vendor_ldac.cc
+    1) 设备树：整份 C6 定制
+       - aosp_arm64_avS.mk        产品配置（GMS 开关、性能参数、横屏属性）
+       - c6-patches/              设备树之外的系统层补丁 + 完整文件覆盖脚本
+         · frameworks_base/       SystemUI 三处（亮色蒙层、锁屏空运营商、QS 无服务文案）
+         · vendor/c6prebuilts     预编译组件
+         · vendor/gms             GMS 集成
+       - sepolicy / overlay / lightsfix / bootanimation
+
+       这一份替换掉 default.xml 里指向 sounddrill31 的通用 phh treble。
+  -->
+  <remove-project name="sounddrill31/device_phh_treble_aosp" />
+  <project path="device/phh/treble"
+           name="device_phh_treble_c6"
+           remote="c6"
+           revision="13.0"
+           groups="pdk" />
+
+  <!--
+    2) AOSP Bluetooth，三处改动：
+       - system/stack/a2dp/a2dp_vendor_ldac.cc
          默认配置锁 96000Hz / 24bit / STEREO
-      2) system/stack/a2dp/a2dp_vendor_ldac_encoder.cc
+       - system/stack/a2dp/a2dp_vendor_ldac_encoder.cc
          质量档 ABR 自适应 -> MID(660kbps 固定)
-      3) system/gd/stack_manager.cc
-         Gd stack 启动超时 3s -> 15s，消除蓝牙进程重启时的连环 ASSERT
+       - system/gd/stack_manager.cc
+         Gd stack 启动超时 3s -> 15s，消除蓝牙进程重启时的连环 ASSERT，
+         避免 WCND 的 cp2_recovery 把共用的 CP2 连 WiFi 一起重置
   -->
   <remove-project name="platform/packages/modules/Bluetooth" />
   <project path="packages/modules/Bluetooth"
            name="platform_packages_modules_Bluetooth"
            remote="c6"
-           revision="derp13"
+           revision="main"
            groups="pdk" />
 
   <!--
-    DerpFest vendor 配置，改动：
-      bootanimation/bootanimation.zip  竖屏面板横构图启动动画
-      build/soong/Android.bp           移除 derp_generator
-      config/common.mk                 产品配置
-      config/telephony.mk              电话配置
+    3) DerpFest vendor 配置：
+       - build/soong/Android.bp   移除 derp_generator（本树不生成 kernel headers）
+       - config/common.mk         产品级配置
+       - config/telephony.mk      电话配置
+
+       开机动画保持上游默认；自制的 1200x1920 横构图版单文件 103MB，
+       超过 GitHub 的 100MB blob 上限，单独分发。
   -->
   <remove-project name="vendor_derp" />
   <project path="vendor/derp"
            name="vendor_derp"
            remote="c6"
-           revision="derp13" />
+           revision="main" />
 </manifest>
